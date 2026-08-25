@@ -1,0 +1,179 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// ==========================================
+// ENUMS
+// ==========================================
+
+enum AuthProvider {
+  LOCAL
+  GOOGLE
+}
+
+enum FileStatus {
+  UPLOADING
+  READY
+  FAILED
+}
+
+enum ResourceType {
+  FILE
+  FOLDER
+}
+
+enum ShareRole {
+  VIEWER
+  EDITOR
+}
+
+enum LinkRole {
+  VIEWER
+}
+
+// ==========================================
+// MODELS
+// ==========================================
+
+model User {
+  id           String       @id @default(uuid()) @db.Uuid
+  email        String       @unique
+  passwordHash String?      @map("password_hash")
+  name         String
+  imageUrl     String?      @map("image_url")
+  authProvider AuthProvider @default(LOCAL) @map("auth_provider")
+  providerId   String?      @map("provider_id")
+  createdAt    DateTime     @default(now()) @map("created_at")
+  updatedAt    DateTime     @updatedAt @map("updated_at")
+
+  // Relations
+  sessions       Session[]
+  ownedFolders   Folder[]    @relation("FolderOwner")
+  ownedFiles     File[]      @relation("FileOwner")
+  receivedShares Share[]     @relation("GranteeUser")
+  createdShares  Share[]     @relation("CreatedShares")
+  createdLinks   LinkShare[] @relation("CreatedLinks")
+  stars          Star[]
+
+  @@unique([authProvider, providerId])
+  @@map("users")
+}
+
+model Session {
+  id               String    @id @default(uuid()) @db.Uuid
+  userId           String    @map("user_id") @db.Uuid
+  refreshTokenHash String    @map("refresh_token_hash")
+  expiresAt        DateTime  @map("expires_at")
+  revokedAt        DateTime? @map("revoked_at")
+  createdAt        DateTime  @default(now()) @map("created_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([expiresAt])
+  @@map("sessions")
+}
+
+model Folder {
+  id        String    @id @default(uuid()) @db.Uuid
+  name      String
+  ownerId   String    @map("owner_id") @db.Uuid
+  parentId  String?   @map("parent_id") @db.Uuid
+  isDeleted Boolean   @default(false) @map("is_deleted")
+  deletedAt DateTime? @map("deleted_at")
+  createdAt DateTime  @default(now()) @map("created_at")
+  updatedAt DateTime  @updatedAt @map("updated_at")
+
+  // Hierarchy Relations
+  owner    User     @relation("FolderOwner", fields: [ownerId], references: [id], onDelete: Cascade)
+  parent   Folder?  @relation("FolderHierarchy", fields: [parentId], references: [id], onDelete: SetNull)
+  children Folder[] @relation("FolderHierarchy")
+  files    File[]
+
+  @@index([ownerId])
+  @@index([parentId])
+  @@index([name])
+  @@index([deletedAt])
+  @@map("folders")
+}
+
+model File {
+  id         String     @id @default(uuid()) @db.Uuid
+  name       String
+  mimeType   String     @map("mime_type")
+  sizeBytes  BigInt     @map("size_bytes")
+  storageKey String     @unique @map("storage_key")
+  ownerId    String     @map("owner_id") @db.Uuid
+  folderId   String?    @map("folder_id") @db.Uuid
+  checksum   String?
+  status     FileStatus @default(UPLOADING)
+  isDeleted  Boolean    @default(false) @map("is_deleted")
+  deletedAt  DateTime?  @map("deleted_at")
+  createdAt  DateTime   @default(now()) @map("created_at")
+  updatedAt  DateTime   @updatedAt @map("updated_at")
+
+  // Relations
+  owner  User    @relation("FileOwner", fields: [ownerId], references: [id], onDelete: Cascade)
+  folder Folder? @relation(fields: [folderId], references: [id], onDelete: SetNull)
+
+  @@index([ownerId])
+  @@index([folderId])
+  @@index([name])
+  @@index([mimeType])
+  @@index([status])
+  @@index([deletedAt])
+  @@index([createdAt])
+  @@map("files")
+}
+
+model Share {
+  id            String       @id @default(uuid()) @db.Uuid
+  resourceType  ResourceType @map("resource_type")
+  resourceId    String       @map("resource_id") @db.Uuid
+  granteeUserId String       @map("grantee_user_id") @db.Uuid
+  role          ShareRole    @default(VIEWER)
+  createdBy     String?      @map("created_by") @db.Uuid
+  createdAt     DateTime     @default(now()) @map("created_at")
+
+  // Relations
+  granteeUser User  @relation("GranteeUser", fields: [granteeUserId], references: [id], onDelete: Cascade)
+  creator     User? @relation("CreatedShares", fields: [createdBy], references: [id], onDelete: SetNull)
+
+  @@unique([resourceType, resourceId, granteeUserId])
+  @@index([resourceType, resourceId])
+  @@index([granteeUserId])
+  @@map("shares")
+}
+
+model LinkShare {
+  id           String       @id @default(uuid()) @db.Uuid
+  resourceType ResourceType @map("resource_type")
+  resourceId   String       @map("resource_id") @db.Uuid
+  token        String       @unique
+  role         LinkRole     @default(VIEWER)
+  passwordHash String?      @map("password_hash")
+  expiresAt    DateTime?    @map("expires_at")
+  createdBy    String?      @map("created_by") @db.Uuid
+  createdAt    DateTime     @default(now()) @map("created_at")
+
+  creator User? @relation("CreatedLinks", fields: [createdBy], references: [id], onDelete: SetNull)
+
+  @@index([resourceType, resourceId])
+  @@map("link_shares")
+}
+
+model Star {
+  userId       String       @map("user_id") @db.Uuid
+  resourceType ResourceType @map("resource_type")
+  resourceId   String       @map("resource_id") @db.Uuid
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@id([userId, resourceType, resourceId])
+  @@index([userId])
+  @@map("stars")
+}
