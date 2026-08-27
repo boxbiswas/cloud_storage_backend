@@ -2,6 +2,7 @@ import { z } from 'zod';
 import { v4 as uuidv4 } from 'uuid';
 import { prisma } from '../lib/prisma.js';
 import { supabase } from '../config/supabase.js';
+import { canAccessResource } from '../middlewares/aclMiddleware.js';
 
 // --- INLINE VALIDATORS ---
 const ALLOWED_MIME_TYPES = [
@@ -19,7 +20,7 @@ const initUploadSchema = z.object({
     mimeType: z.string().refine((val) => ALLOWED_MIME_TYPES.includes(val), {
         message: 'File type not allowed'
     }),
-    sizeBytes: z.number().max(MAX_FILE_SIZE, 'File size exceeds 50MB limit'),
+    sizeBytes: z.number().int().nonnegative().max(MAX_FILE_SIZE, 'File size exceeds 50MB limit'),
     folderId: z.string().uuid().optional().nullable()
 });
 
@@ -31,7 +32,8 @@ const completeUploadSchema = z.object({
 // --- INLINE HELPERS ---
 const sanitizeFilename = (filename) => {
     // Remove special characters, keep alphanumeric, dashes, underscores, and dots
-    return filename.replace(/[^a-zA-Z0-9.\-_]/g, '').toLowerCase();
+    const sanitized = filename.replace(/[^a-zA-Z0-9.\-_]/g, '').toLowerCase();
+    return sanitized || 'unnamed';
 };
 
 const BUCKET_NAME = process.env.SUPABASE_STORAGE_BUCKET || 'drive';
@@ -43,14 +45,15 @@ export const initUpload = async (req, res) => {
     try {
         const validatedData = initUploadSchema.parse(req.body);
         const { name, mimeType, sizeBytes, folderId } = validatedData;
-        const ownerId = req.user.id;
+        let fileOwnerId = req.user.id;
 
-        // If folderId is provided, verify the user owns the folder
+        // If folderId is provided, verify the user has editor access to the folder
         if (folderId) {
-            const folder = await prisma.folder.findUnique({ where: { id: folderId } });
-            if (!folder || folder.ownerId !== ownerId) {
+            const result = await canAccessResource(req.user.id, 'FOLDER', folderId, 'EDITOR');
+            if (!result.granted) {
                 return res.status(403).json({ message: 'Invalid or unauthorized folder' });
             }
+            fileOwnerId = result.resource.ownerId; // File belongs to the destination folder's owner
         }
 
         const fileUuid = uuidv4();
@@ -58,7 +61,7 @@ export const initUpload = async (req, res) => {
         const folderPath = folderId ? folderId : 'root';
 
         // Storage Key Format: tenants/{owner_id}/folders/{folder_id}/files/{file_uuid}-{slug}.{ext}
-        const storageKey = `tenants/${ownerId}/folders/${folderPath}/files/${fileUuid}-${slug}`;
+        const storageKey = `tenants/${fileOwnerId}/folders/${folderPath}/files/${fileUuid}-${slug}`;
 
         // Create database record with UPLOADING status
         const newFile = await prisma.file.create({
@@ -68,7 +71,7 @@ export const initUpload = async (req, res) => {
                 mimeType,
                 sizeBytes,
                 storageKey,
-                ownerId,
+                ownerId: fileOwnerId,
                 folderId,
                 status: 'UPLOADING'
             }
@@ -104,21 +107,33 @@ export const completeUpload = async (req, res) => {
     try {
         const validatedData = completeUploadSchema.parse(req.body);
         const { fileId, checksum } = validatedData;
-        const ownerId = req.user.id;
 
-        // Verify the file exists, belongs to the user, and is currently UPLOADING
-        const file = await prisma.file.findUnique({ where: { id: fileId } });
-
-        if (!file || file.ownerId !== ownerId) {
+        // Verify the user has editor access to the file (they uploaded it or have inherited access)
+        const result = await canAccessResource(req.user.id, 'FILE', fileId, 'EDITOR');
+        
+        if (!result.granted) {
             return res.status(404).json({ message: 'File not found or unauthorized' });
         }
+        
+        const file = result.resource;
 
         if (file.status !== 'UPLOADING') {
             return res.status(400).json({ message: 'File is not in uploading state' });
         }
 
-        // In a production environment, you might verify the file actually exists 
-        // in Supabase Storage here before marking it complete, but for MVP we update the DB.
+        // Verify the file actually exists in Supabase Storage before marking it complete
+        const folderPath = file.storageKey.substring(0, file.storageKey.lastIndexOf('/'));
+        const fileName = file.storageKey.substring(file.storageKey.lastIndexOf('/') + 1);
+        
+        const { data: listData, error: listError } = await supabase.storage
+            .from(BUCKET_NAME)
+            .list(folderPath, {
+                search: fileName
+            });
+
+        if (listError || !listData || listData.length === 0 || !listData.find(f => f.name === fileName)) {
+            return res.status(400).json({ message: 'Upload verification failed. File not found in storage.' });
+        }
 
         const updatedFile = await prisma.file.update({
             where: { id: fileId },
@@ -149,15 +164,7 @@ export const completeUpload = async (req, res) => {
 // GET /files/:id
 export const getFile = async (req, res) => {
     try {
-        const { id } = req.params;
-        const ownerId = req.user.id;
-
-        const file = await prisma.file.findUnique({ where: { id } });
-
-        // Basic ownership check for Day 3 (ACL checks for shared files will be added on Day 4/5)
-        if (!file || file.ownerId !== ownerId || file.isDeleted) {
-            return res.status(404).json({ message: 'File not found or unauthorized' });
-        }
+        const file = req.resource; // From requireViewer middleware
 
         if (file.status !== 'READY') {
             return res.status(400).json({ message: 'File is not ready for download' });
@@ -201,13 +208,14 @@ export const updateFile = async (req, res) => {
         const validatedData = updateFileSchema.parse(req.body);
         const fileId = req.resource.id; // From requireEditor middleware
 
-        // If moving the file, ensure the new folder belongs to the user
+        // If moving the file, ensure the new folder allows editor access
         if (validatedData.folderId) {
-            const targetFolder = await prisma.folder.findUnique({ 
-                where: { id: validatedData.folderId } 
-            });
-            if (!targetFolder || targetFolder.ownerId !== req.user.id) {
+            const result = await canAccessResource(req.user.id, 'FOLDER', validatedData.folderId, 'EDITOR');
+            if (!result.granted) {
                 return res.status(403).json({ message: 'Invalid target folder' });
+            }
+            if (result.resource.ownerId !== req.resource.ownerId) {
+                return res.status(403).json({ message: 'Cannot move file across different owners' });
             }
         }
 
@@ -230,7 +238,7 @@ export const deleteFile = async (req, res) => {
 
         await prisma.file.update({
             where: { id: fileId },
-            data: { isDeleted: true }
+            data: { isDeleted: true, deletedAt: new Date() }
         });
 
         res.status(200).json({ message: 'File moved to trash' });

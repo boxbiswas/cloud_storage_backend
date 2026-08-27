@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { prisma } from '../lib/prisma.js';
+import { canAccessResource } from '../middlewares/aclMiddleware.js';
 
 // --- INLINE VALIDATORS ---
 const createFolderSchema = z.object({
@@ -39,9 +40,9 @@ export const createFolder = async (req, res) => {
 
         // Verify parent folder if provided
         if (parentId) {
-            const parent = await prisma.folder.findUnique({ where: { id: parentId } });
-            if (!parent || parent.ownerId !== ownerId || parent.isDeleted) {
-                return res.status(403).json({ message: 'Invalid parent folder' });
+            const result = await canAccessResource(ownerId, 'FOLDER', parentId, 'EDITOR');
+            if (!result.granted) {
+                return res.status(403).json({ message: 'Invalid or unauthorized parent folder' });
             }
         }
 
@@ -105,6 +106,31 @@ export const updateFolder = async (req, res) => {
             return res.status(400).json({ message: 'Cannot move a folder into itself' });
         }
 
+        // Check if moving to a new parent folder
+        if (validatedData.parentId) {
+            // Prevent moving a folder into its own descendant (Cycle detection)
+            let queue = [folderId];
+            while (queue.length > 0) {
+                const currentId = queue.shift();
+                if (currentId === validatedData.parentId) {
+                    return res.status(400).json({ message: 'Cannot move a folder into its own descendant' });
+                }
+                const children = await prisma.folder.findMany({ 
+                    where: { parentId: currentId, isDeleted: false }, 
+                    select: { id: true } 
+                });
+                queue.push(...children.map(c => c.id));
+            }
+
+            const result = await canAccessResource(req.user.id, 'FOLDER', validatedData.parentId, 'EDITOR');
+            if (!result.granted) {
+                return res.status(403).json({ message: 'Invalid or unauthorized target folder' });
+            }
+            if (result.resource.ownerId !== req.resource.ownerId) {
+                return res.status(403).json({ message: 'Cannot move folder across different owners' });
+            }
+        }
+
         const updatedFolder = await prisma.folder.update({
             where: { id: folderId },
             data: validatedData
@@ -123,18 +149,39 @@ export const updateFolder = async (req, res) => {
 export const deleteFolder = async (req, res) => {
     try {
         const folderId = req.resource.id;
+        const deletedAt = new Date();
 
-        // Soft delete the folder
-        await prisma.folder.update({
-            where: { id: folderId },
-            data: { isDeleted: true }
-        });
+        // Subtree Soft Deletion: Collect all descendant folder IDs using BFS
+        const folderIdsToDelete = [folderId];
+        let queue = [folderId];
 
-        // Note: For a true cascade soft-delete, you would also mark children folders/files as deleted.
-        // For MVP, deleting the parent hides the children during querying.
+        while (queue.length > 0) {
+            const currentId = queue.shift();
+            const children = await prisma.folder.findMany({ 
+                where: { parentId: currentId, isDeleted: false }, 
+                select: { id: true } 
+            });
+            for (const child of children) {
+                folderIdsToDelete.push(child.id);
+                queue.push(child.id);
+            }
+        }
+
+        // Use a transaction to soft-delete the entire subtree (folders and their files)
+        await prisma.$transaction([
+            prisma.folder.updateMany({
+                where: { id: { in: folderIdsToDelete } },
+                data: { isDeleted: true, deletedAt }
+            }),
+            prisma.file.updateMany({
+                where: { folderId: { in: folderIdsToDelete }, isDeleted: false },
+                data: { isDeleted: true, deletedAt }
+            })
+        ]);
         
-        res.status(200).json({ message: 'Folder moved to trash' });
+        res.status(200).json({ message: 'Folder and its contents moved to trash' });
     } catch (err) {
+        console.error("DELETE FOLDER ERROR:", err);
         res.status(500).json({ message: 'Failed to delete folder' });
     }
 };

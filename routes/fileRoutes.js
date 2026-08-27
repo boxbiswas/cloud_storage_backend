@@ -1,6 +1,7 @@
 import express from 'express';
-import { initUpload, completeUpload, getFile } from '../controllers/fileController.js';
+import { initUpload, completeUpload, getFile, updateFile, deleteFile } from '../controllers/fileController.js';
 import { authenticate } from '../middlewares/authMiddleware.js';
+import { requireViewer, requireEditor } from '../middlewares/aclMiddleware.js';
 
 const router = express.Router();
 
