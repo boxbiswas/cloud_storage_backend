@@ -30,12 +30,19 @@ app.use(cookieParser());
 import authRoutes from './routes/authRoutes.js';
 import fileRoutes from './routes/fileRoutes.js';
 import folderRoutes from './routes/folderRoutes.js';
-
+import shareRoutes from './routes/shareRoutes.js';
+import linkRoutes from './routes/linkRoutes.js';
 
 
 app.use('/auth', authRoutes);
 app.use('/files', fileRoutes);
 app.use('/folders', folderRoutes);
+app.use('/shares', shareRoutes);
+
+// The PDF specifically distinguishes the creation endpoint from the resolution endpoint
+app.use('/link-shares', linkRoutes); // Maps POST and DELETE
+app.use('/link', linkRoutes);        // Maps the GET /:token (can point to the same router)
+
 
 
 const PORT = process.env.PORT;
