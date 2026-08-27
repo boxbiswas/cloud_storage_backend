@@ -28,16 +28,17 @@ app.use(cookieParser());
 
 // Import routes
 import authRoutes from './routes/authRoutes.js';
+import fileRoutes from './routes/fileRoutes.js';
 
 
 
-
-app.use('/api/auth', authRoutes);
+app.use('/auth', authRoutes);
+app.use('/files', fileRoutes);
 
 
 const PORT = process.env.PORT;
 
-// Explicitly bind to 0.0.0.0 so Railway's proxy can route traffic to it
-app.listen(PORT, "0.0.0.0", () => {
+
+app.listen(PORT, () => {
     console.log(`Server is running on port ${PORT}`);
 });
