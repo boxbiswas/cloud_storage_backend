@@ -9,6 +9,10 @@ router.use(authenticate);
 
 router.post('/init', initUpload);
 router.post('/complete', completeUpload);
-router.get('/:id', getFile);
+
+// Apply ACL middleware to parameterized routes
+router.get('/:id', requireViewer('FILE'), getFile);
+router.patch('/:id', requireEditor('FILE'), updateFile);
+router.delete('/:id', requireEditor('FILE'), deleteFile);
 
 export default router;

@@ -36,9 +36,9 @@ const sanitizeFilename = (filename) => {
 
 const BUCKET_NAME = process.env.SUPABASE_STORAGE_BUCKET || 'drive';
 
-// --- CONTROLLER METHODS ---
 
-// POST /api/files/init
+
+// POST /files/init
 export const initUpload = async (req, res) => {
     try {
         const validatedData = initUploadSchema.parse(req.body);
@@ -99,7 +99,7 @@ export const initUpload = async (req, res) => {
     }
 };
 
-// POST /api/files/complete
+// POST /files/complete
 export const completeUpload = async (req, res) => {
     try {
         const validatedData = completeUploadSchema.parse(req.body);
@@ -146,7 +146,7 @@ export const completeUpload = async (req, res) => {
     }
 };
 
-// GET /api/files/:id
+// GET /files/:id
 export const getFile = async (req, res) => {
     try {
         const { id } = req.params;
@@ -186,5 +186,55 @@ export const getFile = async (req, res) => {
     } catch (err) {
         console.error("GET FILE ERROR:", err);
         res.status(500).json({ message: 'Failed to retrieve file' });
+    }
+};
+
+
+const updateFileSchema = z.object({
+    name: z.string().min(1).optional(),
+    folderId: z.string().uuid().optional().nullable()
+});
+
+// PATCH /files/:id
+export const updateFile = async (req, res) => {
+    try {
+        const validatedData = updateFileSchema.parse(req.body);
+        const fileId = req.resource.id; // From requireEditor middleware
+
+        // If moving the file, ensure the new folder belongs to the user
+        if (validatedData.folderId) {
+            const targetFolder = await prisma.folder.findUnique({ 
+                where: { id: validatedData.folderId } 
+            });
+            if (!targetFolder || targetFolder.ownerId !== req.user.id) {
+                return res.status(403).json({ message: 'Invalid target folder' });
+            }
+        }
+
+        const updatedFile = await prisma.file.update({
+            where: { id: fileId },
+            data: validatedData
+        });
+
+        res.status(200).json({ message: 'File updated', file: updatedFile });
+    } catch (err) {
+        console.error("UPDATE FILE ERROR:", err);
+        res.status(500).json({ message: 'Failed to update file' });
+    }
+};
+
+// DELETE /files/:id
+export const deleteFile = async (req, res) => {
+    try {
+        const fileId = req.resource.id; // From requireEditor middleware
+
+        await prisma.file.update({
+            where: { id: fileId },
+            data: { isDeleted: true }
+        });
+
+        res.status(200).json({ message: 'File moved to trash' });
+    } catch (err) {
+        res.status(500).json({ message: 'Failed to delete file' });
     }
 };

@@ -29,11 +29,13 @@ app.use(cookieParser());
 // Import routes
 import authRoutes from './routes/authRoutes.js';
 import fileRoutes from './routes/fileRoutes.js';
+import folderRoutes from './routes/folderRoutes.js';
 
 
 
 app.use('/auth', authRoutes);
 app.use('/files', fileRoutes);
+app.use('/folders', folderRoutes);
 
 
 const PORT = process.env.PORT;
