@@ -27,9 +27,12 @@ app.use(express.urlencoded({ extended: true }));
 app.use(cookieParser());
 
 // Import routes
+import authRoutes from './routes/authRoutes.js';
 
 
 
+
+app.use('/api/auth', authRoutes);
 
 
 const PORT = process.env.PORT;
