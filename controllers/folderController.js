@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { prisma } from '../lib/prisma.js';
+import { supabase } from '../config/supabase.js';
 import { canAccessResource } from '../middlewares/aclMiddleware.js';
 
 // --- INLINE VALIDATORS ---
@@ -29,9 +30,49 @@ const generateBreadcrumbs = async (folderId) => {
     return breadcrumbs;
 };
 
+// GET /folders/root
+// Returns the top-level (parentId = null) folders and files owned by the current user.
+export const getRootContents = async (req, res) => {
+    try {
+        const ownerId = req.user.id;
 
+        // Fetch top-level folders (no parent) that belong to this user and aren't deleted
+        const { data: rootFolders, error: foldersError } = await supabase
+            .from('folders')
+            .select('*')
+            .eq('owner_id', ownerId)
+            .is('parent_id', null)
+            .eq('is_deleted', false)
+            .order('name', { ascending: true });
 
-// POST /folders
+        if (foldersError) throw new Error(foldersError.message);
+
+        // Fetch top-level files (no folder) that belong to this user, are ready, and aren't deleted
+        const { data: rootFiles, error: filesError } = await supabase
+            .from('files')
+            .select('*')
+            .eq('owner_id', ownerId)
+            .is('folder_id', null)
+            .eq('is_deleted', false)
+            .eq('status', 'READY')
+            .order('name', { ascending: true });
+
+        if (filesError) throw new Error(filesError.message);
+
+        res.status(200).json({
+            folder: null,           // No current folder at root
+            breadcrumbs: [],        // Empty at root
+            children: {
+                folders: rootFolders || [],
+                files: rootFiles || [],
+            },
+        });
+    } catch (err) {
+        console.error('GET ROOT ERROR:', err);
+        res.status(500).json({ message: 'Failed to load root contents' });
+    }
+};
+
 export const createFolder = async (req, res) => {
     try {
         const validatedData = createFolderSchema.parse(req.body);
