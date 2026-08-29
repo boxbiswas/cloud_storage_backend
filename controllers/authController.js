@@ -1,10 +1,8 @@
 import bcrypt from 'bcrypt';
 import jwt from 'jsonwebtoken';
 import { z } from 'zod';
-import { prisma } from '../lib/prisma.js';
-
-
-// const googleClient = new OAuth2Client(process.env.GOOGLE_CLIENT_ID);
+import crypto from 'crypto';
+import { supabase } from '../config/supabase.js';
 
 // --- INLINE VALIDATORS ---
 const registerSchema = z.object({
@@ -37,15 +35,19 @@ const setAuthCookie = (res, token) => {
     });
 };
 
-
-
 // POST /auth/register
 export const registerUser = async (req, res) => {
     try {
         const validatedData = registerSchema.parse(req.body);
         const { name, email, password } = validatedData;
 
-        const existingUser = await prisma.user.findUnique({ where: { email } });
+        // Check if user already exists via Supabase REST (HTTPS, always works)
+        const { data: existingUser } = await supabase
+            .from('users')
+            .select('id')
+            .eq('email', email)
+            .maybeSingle();
+
         if (existingUser) {
             return res.status(400).json({ message: 'Email already registered.' });
         }
@@ -53,43 +55,55 @@ export const registerUser = async (req, res) => {
         const saltRounds = 10;
         const passwordHash = await bcrypt.hash(password, saltRounds);
 
-        const newUser = await prisma.user.create({
-            data: {
-                name,
-                email,
-                passwordHash,
-                authProvider: 'LOCAL'
-            },
-        });
+        const now = new Date().toISOString();
+        const { data: newUser, error: insertError } = await supabase
+            .from('users')
+            .insert([{ id: crypto.randomUUID(), name, email, password_hash: passwordHash, auth_provider: 'LOCAL', created_at: now, updated_at: now }])
+            .select()
+            .single();
+
+        if (insertError) {
+            console.error('Supabase insert error:', insertError);
+            throw new Error(insertError.message);
+        }
 
         const token = generateToken(newUser);
         setAuthCookie(res, token);
 
         res.status(201).json({
             message: 'User registered successfully',
+            token,
             user: { id: newUser.id, name: newUser.name, email: newUser.email }
         });
     } catch (err) {
-        console.error("REGISTER ERROR:", err);
-        if (err.name === 'ZodError') {
-            return res.status(400).json({ message: 'Validation failed', errors: err.errors });
+        console.error('REGISTER ERROR:', err);
+        if (err instanceof z.ZodError) {
+            return res.status(400).json({
+                message: 'Validation failed',
+                errors: err.issues.map(issue => ({ message: issue.message }))
+            });
         }
-        res.status(500).json({ message: 'Something went wrong during registration' });
+        res.status(500).json({ message: 'Something went wrong during registration', detail: err.message });
     }
 };
 
-// POST /api/auth/login
+// POST /auth/login
 export const loginUser = async (req, res) => {
     try {
         const validatedData = loginSchema.parse(req.body);
         const { email, password } = validatedData;
 
-        const user = await prisma.user.findUnique({ where: { email } });
-        if (!user || !user.passwordHash) {
+        const { data: user } = await supabase
+            .from('users')
+            .select('*')
+            .eq('email', email)
+            .maybeSingle();
+
+        if (!user || !user.password_hash) {
             return res.status(401).json({ message: 'Invalid credentials.' });
         }
 
-        const isMatch = await bcrypt.compare(password, user.passwordHash);
+        const isMatch = await bcrypt.compare(password, user.password_hash);
         if (!isMatch) {
             return res.status(401).json({ message: 'Invalid credentials.' });
         }
@@ -99,12 +113,16 @@ export const loginUser = async (req, res) => {
 
         res.status(200).json({
             message: 'Login successful',
+            token,
             user: { id: user.id, name: user.name, email: user.email }
         });
     } catch (err) {
-        console.error("LOGIN ERROR:", err);
-        if (err.name === 'ZodError') {
-            return res.status(400).json({ message: 'Validation failed', errors: err.errors });
+        console.error('LOGIN ERROR:', err);
+        if (err instanceof z.ZodError) {
+            return res.status(400).json({
+                message: 'Validation failed',
+                errors: err.issues.map(issue => ({ message: issue.message }))
+            });
         }
         res.status(500).json({ message: 'Something went wrong during login' });
     }
@@ -123,10 +141,11 @@ export const logoutUser = (req, res) => {
 // GET /auth/me
 export const getCurrentUser = async (req, res) => {
     try {
-        const user = await prisma.user.findUnique({
-            where: { id: req.user.id },
-            select: { id: true, name: true, email: true, imageUrl: true }
-        });
+        const { data: user } = await supabase
+            .from('users')
+            .select('id, name, email, image_url')
+            .eq('id', req.user.id)
+            .maybeSingle();
 
         if (!user) {
             return res.status(404).json({ message: 'User not found' });
@@ -134,46 +153,12 @@ export const getCurrentUser = async (req, res) => {
 
         res.status(200).json({ user });
     } catch (err) {
+        console.error('GET ME ERROR:', err);
         res.status(500).json({ message: 'Failed to fetch user profile' });
     }
 };
 
-
-// POST /auth/google
+// POST /auth/google (placeholder — requires Google OAuth setup)
 export const googleOAuth = async (req, res) => {
-    try {
-        const { idToken } = req.body;
-        const ticket = await googleClient.verifyIdToken({
-            idToken,
-            audience: process.env.GOOGLE_CLIENT_ID,
-        });
-        const payload = ticket.getPayload();
-        const { email, name, sub: providerId, picture: imageUrl } = payload;
-
-        let user = await prisma.user.findUnique({ where: { email } });
-
-        // If user doesn't exist, register them via Google
-        if (!user) {
-            user = await prisma.user.create({
-                data: {
-                    email,
-                    name,
-                    imageUrl,
-                    authProvider: 'GOOGLE',
-                    providerId,
-                }
-            });
-        }
-
-        const token = generateToken(user);
-        setAuthCookie(res, token);
-
-        res.status(200).json({
-            message: 'Google login successful',
-            user: { id: user.id, name: user.name, email: user.email, imageUrl: user.imageUrl }
-        });
-    } catch (err) {
-        console.error("GOOGLE OAUTH ERROR:", err);
-        res.status(500).json({ message: 'Google authentication failed' });
-    }
+    res.status(501).json({ message: 'Google OAuth not yet configured' });
 };

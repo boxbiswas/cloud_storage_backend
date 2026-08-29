@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { v4 as uuidv4 } from 'uuid';
+import crypto from 'crypto';
 import { prisma } from '../lib/prisma.js';
 import { supabase } from '../config/supabase.js';
 import { canAccessResource } from '../middlewares/aclMiddleware.js';
@@ -56,7 +56,7 @@ export const initUpload = async (req, res) => {
             fileOwnerId = result.resource.ownerId; // File belongs to the destination folder's owner
         }
 
-        const fileUuid = uuidv4();
+        const fileUuid = crypto.randomUUID();
         const slug = sanitizeFilename(name);
         const folderPath = folderId ? folderId : 'root';
 
