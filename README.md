@@ -151,32 +151,6 @@ cd cloud_storage_backend
 
 # Install dependencies
 npm install
-```
-
-### Environment Variables
-
-Create a `.env` file in the `backend/` directory:
-
-```env
-# Server
-PORT=3000
-NODE_ENV=development
-
-# Neon PostgreSQL — copy from your Neon dashboard > Connection String
-DATABASE_URL="postgresql://user:password@ep-xxxx.us-east-2.aws.neon.tech/neondb?sslmode=require"
-
-# JWT — generate with: node -e "console.log(require('crypto').randomBytes(64).toString('hex'))"
-JWT_SECRET=your_minimum_64_character_random_secret_here
-JWT_EXPIRES_IN=1d
-
-# Supabase — from your Supabase project dashboard > Settings > API
-SUPABASE_URL=https://your-project.supabase.co
-SUPABASE_SERVICE_ROLE_KEY=your-service-role-key-here
-SUPABASE_STORAGE_BUCKET=drive
-
-# Google OAuth (for Google Sign-In)
-GOOGLE_CLIENT_ID=your-google-client-id.apps.googleusercontent.com
-```
 
 ### Database Setup
 
