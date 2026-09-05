@@ -200,6 +200,9 @@ export const requireOwner = (resourceType) => async (req, res, next) => {
         const result = await canAccessResource(req.user.id, resourceType, resourceId, 'OWNER');
 
         if (!result.granted || result.resource.ownerId !== req.user.id) {
+            if (result.reason === 'Not found') {
+                return res.status(404).json({ message: 'Resource not found or already deleted' });
+            }
             return res.status(403).json({ message: 'Only the owner can perform this action' });
         }
 
@@ -216,6 +219,9 @@ export const requireEditor = (resourceType) => async (req, res, next) => {
         const result = await canAccessResource(req.user.id, resourceType, resourceId, 'EDITOR');
 
         if (!result.granted) {
+            if (result.reason === 'Not found') {
+                return res.status(404).json({ message: 'Resource not found or already deleted' });
+            }
             return res.status(403).json({ message: 'Editor access required' });
         }
 
@@ -232,6 +238,9 @@ export const requireViewer = (resourceType) => async (req, res, next) => {
         const result = await canAccessResource(req.user.id, resourceType, resourceId, 'VIEWER');
 
         if (!result.granted) {
+            if (result.reason === 'Not found') {
+                return res.status(404).json({ message: 'Resource not found or already deleted' });
+            }
             return res.status(403).json({ message: 'Viewer access required' });
         }
 

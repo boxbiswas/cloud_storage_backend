@@ -36,35 +36,43 @@ export const getRootContents = async (req, res) => {
     try {
         const ownerId = req.user.id;
 
+        console.log('GET ROOT: Fetching folders...');
         // Fetch top-level folders (no parent) that belong to this user and aren't deleted
-        const { data: rootFolders, error: foldersError } = await supabase
-            .from('folders')
-            .select('*')
-            .eq('owner_id', ownerId)
-            .is('parent_id', null)
-            .eq('is_deleted', false)
-            .order('name', { ascending: true });
+        const rootFolders = await prisma.folder.findMany({
+            where: { ownerId, parentId: null, isDeleted: false },
+            include: { owner: { select: { name: true } } },
+            orderBy: { name: 'asc' }
+        });
+        console.log('GET ROOT: Fetched folders');
 
-        if (foldersError) throw new Error(foldersError.message);
-
+        console.log('GET ROOT: Fetching files...');
         // Fetch top-level files (no folder) that belong to this user, are ready, and aren't deleted
-        const { data: rootFiles, error: filesError } = await supabase
-            .from('files')
-            .select('*')
-            .eq('owner_id', ownerId)
-            .is('folder_id', null)
-            .eq('is_deleted', false)
-            .eq('status', 'READY')
-            .order('name', { ascending: true });
+        const rootFiles = await prisma.file.findMany({
+            where: { ownerId, folderId: null, isDeleted: false, status: 'READY' },
+            include: { owner: { select: { name: true } } },
+            orderBy: { name: 'asc' }
+        });
+        console.log('GET ROOT: Fetched files');
 
-        if (filesError) throw new Error(filesError.message);
+        console.log('GET ROOT: Fetching stars...');
+        // Attach stars for frontend
+        const userStars = await prisma.star.findMany({
+            where: { userId: ownerId },
+            select: { resourceId: true, resourceType: true }
+        });
+        console.log('GET ROOT: Fetched stars');
+        const starredSet = new Set(userStars.map(s => `${s.resourceType}:${s.resourceId}`));
+        const rootFoldersWithStars = rootFolders.map(f => ({ ...f, stars: starredSet.has(`FOLDER:${f.id}`) ? [{ id: 'mock' }] : [] }));
+        const rootFilesWithStars = rootFiles.map(f => ({ ...f, stars: starredSet.has(`FILE:${f.id}`) ? [{ id: 'mock' }] : [] }));
+
+        console.log('GET ROOT: Sending response...');
 
         res.status(200).json({
             folder: null,           // No current folder at root
             breadcrumbs: [],        // Empty at root
             children: {
-                folders: rootFolders || [],
-                files: rootFiles || [],
+                folders: rootFoldersWithStars,
+                files: rootFilesWithStars,
             },
         });
     } catch (err) {
@@ -113,13 +121,24 @@ export const getFolderContents = async (req, res) => {
         // Get active children (folders and files)
         const childrenFolders = await prisma.folder.findMany({
             where: { parentId: folderId, isDeleted: false },
+            include: { owner: { select: { name: true } } },
             orderBy: { name: 'asc' }
         });
 
         const files = await prisma.file.findMany({
             where: { folderId: folderId, isDeleted: false, status: 'READY' },
+            include: { owner: { select: { name: true } } },
             orderBy: { name: 'asc' }
         });
+
+        // Attach stars for frontend
+        const userStars = await prisma.star.findMany({
+            where: { userId: req.user.id },
+            select: { resourceId: true, resourceType: true }
+        });
+        const starredSet = new Set(userStars.map(s => `${s.resourceType}:${s.resourceId}`));
+        const foldersWithStars = childrenFolders.map(f => ({ ...f, stars: starredSet.has(`FOLDER:${f.id}`) ? [{ id: 'mock' }] : [] }));
+        const filesWithStars = files.map(f => ({ ...f, stars: starredSet.has(`FILE:${f.id}`) ? [{ id: 'mock' }] : [] }));
 
         const breadcrumbs = await generateBreadcrumbs(folderId);
 
@@ -127,8 +146,8 @@ export const getFolderContents = async (req, res) => {
             folder: req.resource,
             breadcrumbs,
             children: {
-                folders: childrenFolders,
-                files: files
+                folders: foldersWithStars,
+                files: filesWithStars
             }
         });
     } catch (err) {

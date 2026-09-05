@@ -6,6 +6,10 @@ import cors from 'cors';
 
 import { prisma } from "./lib/prisma.js";
 
+BigInt.prototype.toJSON = function () {
+    return this.toString();
+};
+
 const app = express();
 
 // Cors configuration
@@ -33,6 +37,7 @@ import shareRoutes from './routes/shareRoutes.js';
 import linkRoutes from './routes/linkRoutes.js';
 import searchRoutes from './routes/searchRoutes.js';
 import starRoutes from './routes/starRoutes.js';
+import trashRoutes from './routes/trashRoutes.js';
 
 
 app.use('/auth', authRoutes);
@@ -41,6 +46,7 @@ app.use('/folders', folderRoutes);
 app.use('/shares', shareRoutes);
 app.use('/search', searchRoutes);
 app.use('/stars', starRoutes);
+app.use('/trash', trashRoutes);
 
 // It specifically distinguishes the creation endpoint from the resolution endpoint
 app.use('/link-shares', linkRoutes); // Maps POST and DELETE
@@ -48,9 +54,14 @@ app.use('/link', linkRoutes);        // Maps the GET /:token (can point to the s
 
 
 
-const PORT = process.env.PORT;
+import { purgeExpiredTrash } from './lib/purgeTrash.js';
 
+const PORT = process.env.PORT || 3000;
 
 app.listen(PORT, () => {
     console.log(`Server is running on port ${PORT}`);
+    
+    // Retention purge logic (30 days)
+    // Run once every 24 hours (24 * 60 * 60 * 1000)
+    setInterval(purgeExpiredTrash, 24 * 60 * 60 * 1000);
 });
